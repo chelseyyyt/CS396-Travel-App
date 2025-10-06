@@ -1,0 +1,51 @@
+rules:
+
+  # === Project Stack ===
+  - Always use **React with TypeScript** for the frontend.
+  - Always use **Node.js with Express** for the backend API.
+  - Use **PostgreSQL via Supabase** for the database and authentication.
+  - Use **Google Maps JavaScript API** and **Google Places API** for map rendering and location search.
+  - Use **TailwindCSS** for styling, never plain CSS files unless unavoidable.
+
+  # === Frontend Conventions ===
+  - Use only React functional components with hooks. No class components.
+  - All components go into `/components`. 
+  - Pages should live in `/pages`.
+  - Custom hooks should be in `/hooks`.
+  - API calls should be isolated in `/services`.
+  - All state management should use React hooks or Context API. Do not introduce Redux for MVP.
+
+  # === Backend Conventions ===
+  - REST API only. No GraphQL.
+  - All routes live under `/api`.
+  - Validate all inputs with Zod (preferred) or Joi.
+  - Return errors as JSON in the format `{ "error": "message" }`.
+
+  # === Database Conventions ===
+  - Maintain schema with migrations in `/db/migrations`.
+  - MVP tables: `users`, `trips`, `pins`.
+  - Explicit foreign keys required (`pins.trip_id → trips.id`).
+  - Do not introduce extra tables outside MVP.
+
+  # === Testing ===
+  - All backend functions must have Jest unit tests.
+  - Critical React components (Map, TripView) must have snapshot tests.
+  - Place tests in `/tests` and name files `*.test.ts`.
+
+  # === Coding Style ===
+  - Use camelCase for variables and functions, PascalCase for React components.
+  - Always use async/await. No `.then()` chains.
+  - Never use `any` type in TypeScript unless absolutely required.
+  - Follow Airbnb JavaScript style guide conventions.
+
+  # === Documentation ===
+  - Document all REST endpoints in `/docs/API_DOCS.md`.
+  - Write clear comments for non-trivial functions.
+  - Keep README updated with setup and run instructions.
+
+  # === MVP Guardrails ===
+  - Features outside core flow (search → pin → save → view trip) go into backlog.
+  - Do not implement collaboration, sharing, or offline support until MVP is stable.
+  - Optimize only after functionality is complete.
+
+
