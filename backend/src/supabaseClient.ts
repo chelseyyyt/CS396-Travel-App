@@ -18,3 +18,19 @@ export type TripRow = {
 	created_at: string;
 };
 
+export type UserRow = {
+	id: string;
+	name: string | null;
+	email: string;
+	auth_provider: string | null;
+};
+
+export type PinRow = {
+	id: string;
+	trip_id: string;
+	name: string;
+	latitude: number;
+	longitude: number;
+	place_id: string;
+	notes: string | null;
+};

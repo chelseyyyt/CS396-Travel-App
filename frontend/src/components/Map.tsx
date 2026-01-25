@@ -2,18 +2,23 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 /// <reference types="@types/google.maps" />
 
-type Pin = {
+export type MapPin = {
+	id?: string;
+	tripId?: string;
 	latitude: number;
 	longitude: number;
 	name?: string;
 	placeId?: string;
+	notes?: string;
+	clientId?: string;
 };
 
 type MapProps = {
 	apiKey?: string;
 	initialCenter?: { lat: number; lng: number };
 	initialZoom?: number;
-	onPinAdd?: (pin: Pin) => void;
+	initialPins?: MapPin[];
+	onPinAdd?: (pin: MapPin) => Promise<MapPin | void> | void;
 };
 
 // Type declarations for Google Maps (loaded dynamically)
@@ -64,30 +69,82 @@ export const Map: React.FC<MapProps> = ({
 	apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '', 
 	initialCenter, 
 	initialZoom = 12, 
-	onPinAdd 
+	initialPins = [],
+	onPinAdd
 }) => {
 	const mapContainerRef = useRef<HTMLDivElement | null>(null);
 	const searchInputRef = useRef<HTMLInputElement | null>(null);
 	const mapRef = useRef<any>(null);
 	const markersRef = useRef<any[]>([]);
+	const markerKeysRef = useRef<Set<string>>(new Set());
 
 	const [isReady, setIsReady] = useState(false);
-	const [pins, setPins] = useState<Pin[]>([]);
+	const [pins, setPins] = useState<MapPin[]>([]);
 
 	const defaultCenter = useMemo(() => initialCenter ?? { lat: 37.7749, lng: -122.4194 }, [initialCenter]);
 
-	const addMarker = useCallback((position: { lat: number; lng: number }, meta?: { name?: string; placeId?: string }) => {
-		if (!mapRef.current || !window.google?.maps) return;
-		const marker = new window.google.maps.Marker({
-			position,
-			map: mapRef.current,
-		});
-		markersRef.current.push(marker);
+	const createClientId = useCallback(() => {
+		if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+			return crypto.randomUUID();
+		}
+		return `client-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+	}, []);
 
-		const newPin: Pin = { latitude: position.lat, longitude: position.lng, name: meta?.name, placeId: meta?.placeId };
-		setPins(prev => [...prev, newPin]);
-		if (onPinAdd) onPinAdd(newPin);
-	}, [onPinAdd]);
+	const getPinKey = useCallback((pin: MapPin) => {
+		return pin.clientId ?? pin.id ?? `${pin.latitude},${pin.longitude},${pin.placeId ?? ''}`;
+	}, []);
+
+	const addMarkerForPin = useCallback(
+		async (pin: MapPin, notify = true) => {
+			if (!mapRef.current || !window.google?.maps) return;
+			const key = getPinKey(pin);
+			if (markerKeysRef.current.has(key)) return;
+
+			const marker = new window.google.maps.Marker({
+				position: { lat: pin.latitude, lng: pin.longitude },
+				map: mapRef.current,
+			});
+			markersRef.current.push(marker);
+			markerKeysRef.current.add(key);
+
+			setPins(prev => (prev.some(existing => getPinKey(existing) === key) ? prev : [...prev, pin]));
+
+			if (notify && onPinAdd) {
+				const savedPin = await onPinAdd(pin);
+				if (savedPin?.id) {
+					setPins(prev =>
+						prev.map(existing =>
+							existing.clientId && existing.clientId === pin.clientId
+								? { ...savedPin, clientId: existing.clientId }
+								: existing
+						)
+					);
+				}
+			}
+		},
+		[getPinKey, onPinAdd]
+	);
+
+	const addMarker = useCallback(
+		(position: { lat: number; lng: number }, meta?: { name?: string; placeId?: string }) => {
+			const newPin: MapPin = {
+				latitude: position.lat,
+				longitude: position.lng,
+				name: meta?.name,
+				placeId: meta?.placeId,
+				clientId: createClientId(),
+			};
+			void addMarkerForPin(newPin, true);
+		},
+		[addMarkerForPin, createClientId]
+	);
+
+	useEffect(() => {
+		if (!isReady || initialPins.length === 0) return;
+		initialPins.forEach(pin => {
+			void addMarkerForPin(pin, false);
+		});
+	}, [addMarkerForPin, initialPins, isReady]);
 
 	useEffect(() => {
 		let mapClickListener: any = null;
@@ -145,6 +202,7 @@ export const Map: React.FC<MapProps> = ({
 			// Clean up markers
 			markersRef.current.forEach(m => m.setMap(null));
 			markersRef.current = [];
+			markerKeysRef.current.clear();
 		};
 	}, [apiKey, defaultCenter, initialZoom, addMarker]);
 
@@ -171,5 +229,3 @@ export const Map: React.FC<MapProps> = ({
 };
 
 export default Map;
-
-

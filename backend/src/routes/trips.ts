@@ -1,6 +1,6 @@
 import express from 'express';
 import { z } from 'zod';
-import { supabase, TripRow } from '../supabaseClient.js';
+import { supabase, TripRow, UserRow } from '../supabaseClient.js';
 
 export const tripsRouter = express.Router();
 
@@ -18,6 +18,16 @@ tripsRouter.post('/', async (req, res) => {
 			return res.status(400).json({ data: null, error: parsed.error.flatten() });
 		}
 		const { user_id, title, description } = parsed.data;
+		const { error: userError } = await supabase
+			.from<UserRow>('users')
+			.upsert(
+				{
+					id: user_id,
+					email: `${user_id}@travelapp.local`,
+				},
+				{ onConflict: 'id' }
+			);
+		if (userError) return res.status(500).json({ data: null, error: userError.message });
 		const { data, error } = await supabase
 			.from<TripRow>('trips')
 			.insert({ user_id, title, description: description ?? null })
@@ -104,4 +114,3 @@ tripsRouter.delete('/:id', async (req, res) => {
 });
 
 export default tripsRouter;
-

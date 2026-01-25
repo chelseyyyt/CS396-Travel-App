@@ -70,3 +70,57 @@ interface Trip {
   created_at: string; // ISO timestamp
 }
 ```
+
+## Pins
+
+Base paths:
+- `/api/trips/:tripId/pins`
+- `/api/pins/:pinId`
+
+### Create Pin
+- **Method**: POST
+- **Route**: `/api/trips/:tripId/pins`
+- **Description**: Create a new pin for a trip.
+- **Request Body (JSON)**:
+  - `name` (string, ≤200 chars, optional)
+  - `latitude` (number, -90 to 90, required)
+  - `longitude` (number, -180 to 180, required)
+  - `placeId` (string, ≤255 chars, optional)
+  - `notes` (string, ≤2000 chars, optional)
+- **Responses**:
+  - 201: `{ data: Pin, error: null }`
+  - 400: `{ data: null, error: ZodError | string }`
+  - 500: `{ data: null, error: string }`
+
+### List Pins (by trip)
+- **Method**: GET
+- **Route**: `/api/trips/:tripId/pins`
+- **Description**: Get all pins that belong to a trip.
+- **Responses**:
+  - 200: `{ data: Pin[], error: null }`
+  - 400: `{ data: null, error: string }`
+  - 500: `{ data: null, error: string }`
+
+### Delete Pin
+- **Method**: DELETE
+- **Route**: `/api/pins/:pinId`
+- **Description**: Delete a pin by its ID.
+- **Responses**:
+  - 200: `{ data: { deleted: true }, error: null }`
+  - 400: `{ data: null, error: string }`
+  - 404: `{ data: null, error: 'Pin not found' }`
+  - 500: `{ data: null, error: string }`
+
+### Types
+
+```ts
+interface Pin {
+  id: string;
+  trip_id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  place_id: string;
+  notes: string | null;
+}
+```

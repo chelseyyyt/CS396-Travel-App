@@ -15,6 +15,7 @@ jest.mock('../src/supabaseClient', () => {
 		supabase: {
 			from: jest.fn(() => ({
 				insert: jest.fn().mockReturnThis(),
+				upsert: jest.fn().mockReturnThis(),
 				update: jest.fn().mockReturnThis(),
 				delete: jest.fn().mockReturnThis(),
 				select: jest.fn().mockReturnThis(),
@@ -42,4 +43,3 @@ describe('Trips Router', () => {
 		expect(res.body.error).toBeTruthy();
 	});
 });
-
