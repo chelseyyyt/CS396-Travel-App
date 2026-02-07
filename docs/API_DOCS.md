@@ -124,3 +124,88 @@ interface Pin {
   notes: string | null;
 }
 ```
+
+## Videos
+
+Base paths:
+- `/api/trips/:tripId/videos`
+- `/api/videos/:videoId`
+
+### Upload Video
+- **Method**: POST
+- **Route**: `/api/trips/:tripId/videos`
+- **Description**: Upload a video for a trip and enqueue processing.
+- **Request Body (multipart/form-data)**:
+  - `video` (file, required)
+- **Responses**:
+  - 201: `{ data: { videoId: string, jobId: string }, error: null }`
+  - 400: `{ data: null, error: string }`
+  - 500: `{ data: null, error: string }`
+
+### Get Video + Job + Candidates
+- **Method**: GET
+- **Route**: `/api/videos/:videoId`
+- **Description**: Get video status, latest job, and extracted candidates.
+- **Responses**:
+  - 200: `{ data: { video: Video, job: VideoJob | null, candidates: VideoCandidate[] }, error: null }`
+  - 400: `{ data: null, error: string }`
+  - 404: `{ data: null, error: 'Video not found' }`
+  - 500: `{ data: null, error: string }`
+
+### Approve Candidates → Pins
+- **Method**: POST
+- **Route**: `/api/videos/:videoId/approve`
+- **Description**: Convert selected candidates into pins for the trip.
+- **Request Body (JSON)**:
+  - `candidateIds` (string[], required)
+- **Responses**:
+  - 200: `{ data: { createdPinCount: number }, error: null }`
+  - 400: `{ data: null, error: string }`
+  - 404: `{ data: null, error: 'Video not found' }`
+  - 500: `{ data: null, error: string }`
+
+### Retry Job (Optional)
+- **Method**: POST
+- **Route**: `/api/videos/:videoId/retry`
+- **Description**: Reset the latest job to queued.
+- **Responses**:
+  - 200: `{ data: { job: VideoJob | null }, error: null }`
+  - 400: `{ data: null, error: string }`
+  - 500: `{ data: null, error: string }`
+
+### Types
+
+```ts
+interface Video {
+  id: string;
+  trip_id: string;
+  original_filename: string | null;
+  storage_path: string | null;
+  status: string; // queued | processing | done | failed
+  created_at: string; // ISO timestamp
+}
+
+interface VideoJob {
+  id: string;
+  video_id: string;
+  status: string; // queued | processing | done | failed
+  progress: number;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface VideoCandidate {
+  id: string;
+  video_id: string;
+  name: string;
+  address_hint: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  confidence: number;
+  start_ms: number | null;
+  end_ms: number | null;
+  source: Record<string, unknown> | null;
+  created_at: string;
+}
+```

@@ -18,6 +18,39 @@ export type Pin = {
 	notes: string | null;
 };
 
+export type Video = {
+	id: string;
+	trip_id: string;
+	original_filename: string | null;
+	storage_path: string | null;
+	status: string;
+	created_at: string;
+};
+
+export type VideoJob = {
+	id: string;
+	video_id: string;
+	status: string;
+	progress: number;
+	error: string | null;
+	created_at: string;
+	updated_at: string;
+};
+
+export type VideoCandidate = {
+	id: string;
+	video_id: string;
+	name: string;
+	address_hint: string | null;
+	latitude: number | null;
+	longitude: number | null;
+	confidence: number;
+	start_ms: number | null;
+	end_ms: number | null;
+	source: Record<string, unknown> | null;
+	created_at: string;
+};
+
 type ApiResponse<T> = {
 	data: T | null;
 	error: unknown | null;
@@ -72,4 +105,40 @@ export async function createPin(
 
 export async function deletePin(pinId: string): Promise<ApiResponse<{ deleted: true }>> {
 	return request<{ deleted: true }>(`/api/pins/${pinId}`, { method: 'DELETE' });
+}
+
+export async function uploadTripVideo(
+	tripId: string,
+	file: File
+): Promise<ApiResponse<{ videoId: string; jobId: string }>> {
+	const formData = new FormData();
+	formData.append('video', file);
+	try {
+		const res = await fetch(`${API_URL}/api/trips/${tripId}/videos`, {
+			method: 'POST',
+			body: formData,
+		});
+		const json = (await res.json()) as ApiResponse<{ videoId: string; jobId: string }>;
+		return json;
+	} catch (error) {
+		return { data: null, error };
+	}
+}
+
+export async function getVideo(
+	videoId: string
+): Promise<ApiResponse<{ video: Video; job: VideoJob | null; candidates: VideoCandidate[] }>> {
+	return request<{ video: Video; job: VideoJob | null; candidates: VideoCandidate[] }>(`/api/videos/${videoId}`, {
+		method: 'GET',
+	});
+}
+
+export async function approveVideoCandidates(
+	videoId: string,
+	candidateIds: string[]
+): Promise<ApiResponse<{ createdPinCount: number }>> {
+	return request<{ createdPinCount: number }>(`/api/videos/${videoId}/approve`, {
+		method: 'POST',
+		body: JSON.stringify({ candidateIds }),
+	});
 }

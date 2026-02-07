@@ -45,6 +45,15 @@ VITE_API_URL=http://localhost:5000
 SUPABASE_URL=your_supabase_project_url
 SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
 PORT=5000
+CORS_ORIGIN=http://localhost:5173
+UPLOADS_DIR=/absolute/path/to/backend/uploads
+```
+
+**Worker** (`worker/.env`):
+```bash
+SUPABASE_URL=your_supabase_project_url
+SUPABASE_SERVICE_KEY=your_supabase_service_role_key
+UPLOADS_DIR=/absolute/path/to/backend/uploads
 ```
 
 ### 3. Database Setup
@@ -52,6 +61,8 @@ PORT=5000
 1. Go to your Supabase dashboard → SQL Editor
 2. Copy the contents of `db/migrations/001_init.sql`
 3. Paste and execute it to create the tables
+4. Copy the contents of `db/migrations/002_video_pipeline.sql`
+5. Paste and execute it to create the video pipeline tables
 
 Or use Supabase CLI:
 ```bash
@@ -77,6 +88,15 @@ npm run dev
 ```
 
 The frontend will start on `http://localhost:5173` (or the port Vite assigns)
+
+**Terminal 3 - Worker:**
+```bash
+cd worker
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python worker.py
+```
 
 ### Production Build
 
@@ -108,6 +128,7 @@ TravelApp/
 │       └── App.tsx      # Main app with routing
 ├── db/
 │   └── migrations/    # Database migration files
+├── worker/            # Python video processing worker
 └── docs/             # Documentation
     ├── PDR.md        # Preliminary Design Review
     └── API_DOCS.md   # API documentation
@@ -131,6 +152,9 @@ Base URL: `http://localhost:5000`
 - `GET /api/trips/:id` - Get a trip by ID
 - `PUT /api/trips/:id` - Update a trip
 - `DELETE /api/trips/:id` - Delete a trip
+- `POST /api/trips/:tripId/videos` - Upload a video for a trip
+- `GET /api/videos/:videoId` - Get video status + candidates
+- `POST /api/videos/:videoId/approve` - Convert candidates into pins
 
 ## Development
 
