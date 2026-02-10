@@ -137,6 +137,7 @@ Base paths:
 - **Description**: Upload a video for a trip and enqueue processing.
 - **Request Body (multipart/form-data)**:
   - `video` (file, required)
+  - `location_hint` (string, optional) - city/region to bias place search
 - **Responses**:
   - 201: `{ data: { videoId: string, jobId: string }, error: null }`
   - 400: `{ data: null, error: string }`
@@ -159,7 +160,7 @@ Base paths:
 - **Request Body (JSON)**:
   - `candidateIds` (string[], required)
 - **Responses**:
-  - 200: `{ data: { createdPinCount: number }, error: null }`
+  - 200: `{ data: { createdPinCount: number, pins: Pin[] }, error: null }`
   - 400: `{ data: null, error: string }`
   - 404: `{ data: null, error: 'Video not found' }`
   - 500: `{ data: null, error: string }`
@@ -181,6 +182,7 @@ interface Video {
   trip_id: string;
   original_filename: string | null;
   storage_path: string | null;
+  location_hint: string | null;
   status: string; // queued | processing | done | failed
   created_at: string; // ISO timestamp
 }
@@ -206,6 +208,24 @@ interface VideoCandidate {
   start_ms: number | null;
   end_ms: number | null;
   source: Record<string, unknown> | null;
+  places_query: string | null;
+  places_place_id: string | null;
+  places_name: string | null;
+  places_address: string | null;
+  places_raw: Record<string, unknown> | null;
+  extraction_method: string | null;
+  llm_prompt: string | null;
+  llm_output: Record<string, unknown> | null;
   created_at: string;
 }
 ```
+
+### Debug Endpoint
+- **Method**: GET
+- **Route**: `/api/videos/:videoId/debug`
+- **Description**: Return video, job, and candidates with evidence and places metadata.
+- **Responses**:
+  - 200: `{ data: { video: Video, job: VideoJob | null, candidates: VideoCandidate[] }, error: null }`
+  - 400: `{ data: null, error: string }`
+  - 404: `{ data: null, error: 'Video not found' }`
+  - 500: `{ data: null, error: string }`

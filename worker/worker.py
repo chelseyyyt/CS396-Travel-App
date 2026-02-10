@@ -6,6 +6,14 @@ from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 from supabase import Client, create_client
 
+from pipeline import (
+    build_pipeline_candidates,
+    extract_audio,
+    ocr_frames,
+    sample_frames,
+    transcribe,
+)
+
 POLL_INTERVAL_SECONDS = 2
 
 
@@ -89,61 +97,40 @@ def write_candidates(supabase: Client, video_id: str, candidates: List[Dict[str,
     supabase.table('video_candidates').insert(payload).execute()
 
 
-def process_video(video: Dict[str, Any], uploads_dir: str) -> List[Dict[str, Any]]:
-    _ = uploads_dir
-    _ = video.get('storage_path')
+def write_transcript(supabase: Client, video_id: str, transcript_segments: List[Dict[str, int | str]]) -> None:
+    supabase.table('video_transcripts').insert(
+        {
+            'video_id': video_id,
+            'transcript': transcript_segments,
+        }
+    ).execute()
 
-    transcript = 'Example transcript mentioning a cafe, ramen shop, and market.'
-    ocr_text = ['Example Cafe', 'Example Ramen', 'Example Market']
 
-    candidates = [
-        {
-            'name': 'Example Cafe',
-            'address_hint': 'Downtown',
-            'latitude': 37.775,
-            'longitude': -122.419,
-            'confidence': 0.82,
-            'start_ms': 1200,
-            'end_ms': 6400,
-            'source': {
-                'transcript': transcript,
-                'ocr': ocr_text[0],
-            },
-        },
-        {
-            'name': 'Example Ramen',
-            'address_hint': 'Market St',
-            'latitude': 37.781,
-            'longitude': -122.412,
-            'confidence': 0.77,
-            'start_ms': 7000,
-            'end_ms': 12300,
-            'source': {
-                'transcript': transcript,
-                'ocr': ocr_text[1],
-            },
-        },
-        {
-            'name': 'Example Market',
-            'address_hint': 'Waterfront',
-            'latitude': 37.806,
-            'longitude': -122.419,
-            'confidence': 0.69,
-            'start_ms': 13000,
-            'end_ms': 19500,
-            'source': {
-                'transcript': transcript,
-                'ocr': ocr_text[2],
-            },
-        },
-    ]
+def process_video(video: Dict[str, Any], supabase: Client) -> List[Dict[str, Any]]:
+    video_path = video.get('storage_path')
+    if not video_path or not os.path.exists(video_path):
+        raise RuntimeError('Video file not found on disk')
+
+    audio_path = extract_audio(video_path)
+    transcript_segments = transcribe(audio_path)
+    write_transcript(supabase, video['id'], transcript_segments)
+
+    frames = sample_frames(video_path)
+    ocr_lines = ocr_frames(frames)
+
+    location_hint = video.get('location_hint')
+    candidates = build_pipeline_candidates(transcript_segments, ocr_lines, location_hint)
+
+    print(
+        f"[worker] transcript segments: {len(transcript_segments)}, "
+        f"ocr lines: {len(ocr_lines)}, candidates: {len(candidates)}"
+    )
 
     return candidates
 
 
 def main() -> None:
     load_dotenv()
-    uploads_dir = os.getenv('UPLOADS_DIR', os.path.abspath(os.path.join(os.getcwd(), '..', 'backend', 'uploads')))
     supabase = build_supabase()
 
     while True:
@@ -166,7 +153,8 @@ def main() -> None:
             if not video:
                 raise RuntimeError('Video record not found')
 
-            candidates = process_video(video, uploads_dir)
+            candidates = process_video(video, supabase)
+            update_job_status(supabase, job_id, 'processing', 80)
             write_candidates(supabase, video_id, candidates)
 
             update_job_status(supabase, job_id, 'done', 100)

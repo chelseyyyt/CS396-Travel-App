@@ -1,3 +1,7 @@
 supabase>=2.8.0
 python-dotenv>=1.0.1
 requests>=2.32.0
+faster-whisper>=1.0.3
+paddleocr>=2.7.3
+opencv-python>=4.10.0
+paddlepaddle>=2.6.0

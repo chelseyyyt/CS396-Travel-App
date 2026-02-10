@@ -47,6 +47,7 @@ SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
 PORT=5000
 CORS_ORIGIN=http://localhost:5173
 UPLOADS_DIR=/absolute/path/to/backend/uploads
+GOOGLE_MAPS_API_KEY=your_google_maps_api_key
 ```
 
 **Worker** (`worker/.env`):
@@ -54,7 +55,13 @@ UPLOADS_DIR=/absolute/path/to/backend/uploads
 SUPABASE_URL=your_supabase_project_url
 SUPABASE_SERVICE_KEY=your_supabase_service_role_key
 UPLOADS_DIR=/absolute/path/to/backend/uploads
+WHISPER_MODEL=base
+OCR_LANG=en
+USE_OLLAMA=false
+OLLAMA_MODEL=qwen2.5:7b-instruct
 ```
+
+Tip: adding a location hint (city/region) when uploading a video improves candidate accuracy.
 
 ### 3. Database Setup
 
@@ -63,6 +70,8 @@ UPLOADS_DIR=/absolute/path/to/backend/uploads
 3. Paste and execute it to create the tables
 4. Copy the contents of `db/migrations/002_video_pipeline.sql`
 5. Paste and execute it to create the video pipeline tables
+6. Copy the contents of `db/migrations/003_video_location_hint.sql`
+7. Paste and execute it to create the location hint column
 
 Or use Supabase CLI:
 ```bash
@@ -98,7 +107,19 @@ pip install -r requirements.txt
 python worker.py
 ```
 
-### Production Build
+## Local extraction setup
+
+- Install ffmpeg:
+```bash
+brew install ffmpeg
+```
+- Install worker deps:
+```bash
+cd worker
+pip install -r requirements.txt
+```
+
+## Production Build
 
 **Frontend:**
 ```bash

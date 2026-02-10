@@ -45,6 +45,7 @@ export type VideoRow = {
 	trip_id: string;
 	original_filename: string | null;
 	storage_path: string | null;
+	location_hint: string | null;
 	status: string;
 	created_at: string;
 };
@@ -70,5 +71,20 @@ export type VideoCandidateRow = {
 	start_ms: number | null;
 	end_ms: number | null;
 	source: Record<string, unknown> | null;
+	places_query: string | null;
+	places_place_id: string | null;
+	places_name: string | null;
+	places_address: string | null;
+	places_raw: Record<string, unknown> | null;
+	extraction_method: string | null;
+	llm_prompt: string | null;
+	llm_output: Record<string, unknown> | null;
+	created_at: string;
+};
+
+export type VideoTranscriptRow = {
+	id: string;
+	video_id: string;
+	transcript: Record<string, unknown>;
 	created_at: string;
 };

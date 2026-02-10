@@ -23,6 +23,7 @@ export type Video = {
 	trip_id: string;
 	original_filename: string | null;
 	storage_path: string | null;
+	location_hint: string | null;
 	status: string;
 	created_at: string;
 };
@@ -48,6 +49,14 @@ export type VideoCandidate = {
 	start_ms: number | null;
 	end_ms: number | null;
 	source: Record<string, unknown> | null;
+	places_query: string | null;
+	places_place_id: string | null;
+	places_name: string | null;
+	places_address: string | null;
+	places_raw: Record<string, unknown> | null;
+	extraction_method: string | null;
+	llm_prompt: string | null;
+	llm_output: Record<string, unknown> | null;
 	created_at: string;
 };
 
@@ -109,10 +118,14 @@ export async function deletePin(pinId: string): Promise<ApiResponse<{ deleted: t
 
 export async function uploadTripVideo(
 	tripId: string,
-	file: File
+	file: File,
+	locationHint?: string
 ): Promise<ApiResponse<{ videoId: string; jobId: string }>> {
 	const formData = new FormData();
 	formData.append('video', file);
+	if (locationHint && locationHint.trim().length > 0) {
+		formData.append('location_hint', locationHint.trim());
+	}
 	try {
 		const res = await fetch(`${API_URL}/api/trips/${tripId}/videos`, {
 			method: 'POST',
@@ -136,9 +149,29 @@ export async function getVideo(
 export async function approveVideoCandidates(
 	videoId: string,
 	candidateIds: string[]
-): Promise<ApiResponse<{ createdPinCount: number }>> {
-	return request<{ createdPinCount: number }>(`/api/videos/${videoId}/approve`, {
+): Promise<ApiResponse<{ createdPinCount: number; pins: Pin[] }>> {
+	return request<{ createdPinCount: number; pins: Pin[] }>(`/api/videos/${videoId}/approve`, {
 		method: 'POST',
 		body: JSON.stringify({ candidateIds }),
+	});
+}
+
+export async function getVideoDebug(
+	videoId: string
+): Promise<
+	ApiResponse<{
+		video: Video;
+		job: VideoJob | null;
+		candidates: VideoCandidate[];
+		transcript: { transcript: Record<string, unknown> } | null;
+	}>
+> {
+	return request<{
+		video: Video;
+		job: VideoJob | null;
+		candidates: VideoCandidate[];
+		transcript: { transcript: Record<string, unknown> } | null;
+	}>(`/api/videos/${videoId}/debug`, {
+		method: 'GET',
 	});
 }

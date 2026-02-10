@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Map from '../components/Map';
+import GoogleMap from '../components/Map';
 import type { MapPin } from '../components/Map';
 import {
 	approveVideoCandidates,
 	createPin,
 	createTrip,
+	deletePin,
 	getVideo,
+	getVideoDebug,
 	listPins,
 	uploadTripVideo,
 } from '../services/api';
@@ -13,6 +15,7 @@ import type { Pin as ApiPin, VideoCandidate, VideoJob } from '../services/api';
 
 const TRIP_ID_KEY = 'travelapp_trip_id';
 const USER_ID_KEY = 'travelapp_user_id';
+const VIDEO_LOCATION_HINT_KEY = 'travelapp_last_video_location_hint';
 
 function createLocalId() {
 	if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -44,6 +47,16 @@ export default function Planner() {
 	const [hasAutoSelected, setHasAutoSelected] = useState(false);
 	const [isUploading, setIsUploading] = useState(false);
 	const [selectedFile, setSelectedFile] = useState<File | null>(null);
+	const [locationHint, setLocationHint] = useState('');
+	const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
+	const [showDebug, setShowDebug] = useState(false);
+	const [debugData, setDebugData] = useState<{
+		video: { id: string } | null;
+		job: VideoJob | null;
+		candidates: VideoCandidate[];
+		transcript: { transcript: Record<string, unknown> } | null;
+	} | null>(null);
+	const [debugLoading, setDebugLoading] = useState(false);
 
 	const initialPins = useMemo(() => pins, [pins]);
 
@@ -94,6 +107,13 @@ export default function Planner() {
 			isActive = false;
 		};
 	}, [refreshPins]);
+
+	useEffect(() => {
+		const storedHint = localStorage.getItem(VIDEO_LOCATION_HINT_KEY);
+		if (storedHint) {
+			setLocationHint(storedHint);
+		}
+	}, []);
 
 	useEffect(() => {
 		if (!videoId) return;
@@ -175,14 +195,24 @@ export default function Planner() {
 		setSelectedCandidates(new Set());
 		setHasAutoSelected(false);
 
-		const res = await uploadTripVideo(tripId, selectedFile);
+		const res = await uploadTripVideo(tripId, selectedFile, locationHint);
 		if (res.data?.videoId) {
 			setVideoId(res.data.videoId);
 		} else {
 			setErrorMessage('Could not upload video. Please try again.');
 		}
 		setIsUploading(false);
-	}, [selectedFile, tripId]);
+	}, [locationHint, selectedFile, tripId]);
+
+	const handleLocationHintChange = useCallback((value: string) => {
+		setLocationHint(value);
+		const trimmed = value.trim();
+		if (trimmed.length > 0) {
+			localStorage.setItem(VIDEO_LOCATION_HINT_KEY, trimmed);
+		} else {
+			localStorage.removeItem(VIDEO_LOCATION_HINT_KEY);
+		}
+	}, []);
 
 	const toggleCandidate = useCallback((candidateId: string) => {
 		setSelectedCandidates(prev => {
@@ -209,6 +239,36 @@ export default function Planner() {
 		}
 	}, [refreshPins, selectedCandidates, tripId, videoId]);
 
+	const handlePinDelete = useCallback(async (pinId: string) => {
+		const res = await deletePin(pinId);
+		if (res.data) {
+			setPins(prev => prev.filter(pin => pin.id !== pinId));
+		} else {
+			setErrorMessage('Could not delete pin.');
+		}
+	}, []);
+
+	const handleShowDebug = useCallback(async () => {
+		if (!videoId) return;
+		setShowDebug(prev => !prev);
+		if (showDebug) return;
+		setDebugLoading(true);
+		const res = await getVideoDebug(videoId);
+		if (res.data) {
+			setDebugData(res.data);
+		} else {
+			setErrorMessage('Could not load debug data.');
+		}
+		setDebugLoading(false);
+	}, [showDebug, videoId]);
+
+	const parsePinMeta = useCallback((pin: MapPin) => {
+		if (!pin.notes) return { source: 'manual', address: null };
+		const [prefix, address] = pin.notes.split(' — ');
+		const source = prefix?.includes('from video') ? 'video' : 'manual';
+		return { source, address: address ?? null };
+	}, []);
+
 	return (
 		<div className="relative h-screen w-full">
 			{errorMessage ? (
@@ -218,10 +278,66 @@ export default function Planner() {
 					</div>
 				</div>
 			) : null}
+			<div className="absolute left-4 top-20 z-20 w-72 max-w-[90vw] rounded-xl border border-slate-200 bg-white/95 p-4 shadow-lg backdrop-blur">
+				<div className="flex items-center justify-between">
+					<h3 className="text-sm font-semibold text-slate-900">Pins</h3>
+					<span className="text-xs text-slate-500">{pins.length}</span>
+				</div>
+				<div className="mt-3 max-h-80 space-y-2 overflow-y-auto">
+					{pins.length === 0 ? (
+						<p className="text-xs text-slate-400">No pins yet.</p>
+					) : (
+						pins.map(pin => {
+							const meta = parsePinMeta(pin);
+							return (
+								<div
+									key={pin.id ?? pin.clientId}
+									className="flex items-start justify-between gap-2 rounded-md border border-slate-100 bg-white px-2 py-2 text-xs text-slate-700"
+								>
+									<button
+										type="button"
+										className="flex-1 text-left"
+										onClick={() => pin.id && setSelectedPinId(pin.id)}
+									>
+										<div className="font-semibold text-slate-900">{pin.name ?? 'Dropped Pin'}</div>
+										{meta.address ? (
+											<div className="text-[11px] text-slate-500">{meta.address}</div>
+										) : null}
+										<span className="mt-1 inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
+											{meta.source}
+										</span>
+									</button>
+									{pin.id ? (
+										<button
+											type="button"
+											onClick={() => handlePinDelete(pin.id!)}
+											className="rounded-md border border-slate-200 px-2 py-1 text-[10px] text-slate-500 hover:text-slate-700"
+										>
+											Delete
+										</button>
+									) : null}
+								</div>
+							);
+						})
+					)}
+				</div>
+			</div>
 			<div className="absolute right-4 top-20 z-20 w-80 max-w-[90vw] rounded-xl border border-slate-200 bg-white/95 p-4 shadow-lg backdrop-blur">
 				<h3 className="text-sm font-semibold text-slate-900">Video → Place Candidates</h3>
 				<p className="mt-1 text-xs text-slate-500">Upload a short clip and review extracted places.</p>
 				<div className="mt-3 flex flex-col gap-2">
+					<div>
+						<label className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+							Video location (optional)
+						</label>
+						<input
+							type="text"
+							value={locationHint}
+							onChange={event => handleLocationHintChange(event.target.value)}
+							placeholder="e.g., Chicago, IL"
+							className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm focus:border-slate-400 focus:outline-none"
+						/>
+					</div>
 					<input
 						type="file"
 						accept="video/*"
@@ -237,6 +353,11 @@ export default function Planner() {
 						{isUploading ? 'Uploading…' : 'Upload Video'}
 					</button>
 				</div>
+				{locationHint.trim().length === 0 ? (
+					<p className="mt-2 text-[11px] text-amber-600">
+						Tip: add a city (e.g., Chicago) to improve accuracy.
+					</p>
+				) : null}
 				<div className="mt-3 text-xs text-slate-600">
 					Status:{' '}
 					<span className="font-medium text-slate-900">
@@ -282,8 +403,78 @@ export default function Planner() {
 				) : (
 					<p className="mt-3 text-xs text-slate-400">Candidates will appear here once processing completes.</p>
 				)}
+				<div className="mt-3">
+					<button
+						type="button"
+						onClick={handleShowDebug}
+						disabled={!videoId}
+						className="w-full rounded-md border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+					>
+						{showDebug ? 'Hide Video Debug' : 'Show Video Debug'}
+					</button>
+					{showDebug ? (
+						<div className="mt-2 rounded-md border border-slate-100 bg-slate-50 p-2 text-[11px] text-slate-600">
+							{debugLoading ? (
+								<p>Loading debug data…</p>
+							) : debugData ? (
+								<div className="space-y-2">
+									<div>
+										<p className="font-semibold text-slate-700">Transcript preview</p>
+										<p className="line-clamp-4">
+											{debugData.candidates
+												.flatMap(candidate => (candidate.source?.transcript_snippets as { text: string }[] | undefined) ?? [])
+												.slice(0, 4)
+												.map(snippet => snippet.text)
+												.join(' ')}
+										</p>
+									</div>
+									{debugData.transcript ? (
+										<div>
+											<p className="font-semibold text-slate-700">Full transcript</p>
+											<pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md bg-white p-2 text-[11px] text-slate-600">
+												{JSON.stringify(debugData.transcript.transcript, null, 2)}
+											</pre>
+										</div>
+									) : null}
+									<div>
+										<p className="font-semibold text-slate-700">OCR preview</p>
+										<p className="line-clamp-4">
+											{debugData.candidates
+												.flatMap(candidate => (candidate.source?.ocr_snippets as { text: string }[] | undefined) ?? [])
+												.slice(0, 6)
+												.map(snippet => snippet.text)
+												.join(' · ')}
+										</p>
+									</div>
+									<div>
+										<p className="font-semibold text-slate-700">Candidates</p>
+										{debugData.candidates.map(candidate => (
+											<div key={candidate.id} className="mt-2 rounded-md border border-slate-200 bg-white p-2">
+												<p className="font-semibold text-slate-800">{candidate.name}</p>
+												<p>Places query: {candidate.places_query ?? 'n/a'}</p>
+												<p>
+													Places result: {candidate.places_name ?? 'n/a'}{' '}
+													{candidate.places_address ? `· ${candidate.places_address}` : ''}
+												</p>
+												<p>Extraction: {candidate.extraction_method ?? 'n/a'}</p>
+											</div>
+										))}
+									</div>
+								</div>
+							) : (
+								<p>No debug data yet.</p>
+							)}
+						</div>
+					) : null}
+				</div>
 			</div>
-			<Map initialPins={initialPins} onPinAdd={handlePinAdd} />
+			<GoogleMap
+				initialPins={initialPins}
+				pins={pins}
+				selectedPinId={selectedPinId}
+				onPinAdd={handlePinAdd}
+				onPinDelete={handlePinDelete}
+			/>
 		</div>
 	);
 }
