@@ -58,6 +58,13 @@ export type VideoJobRow = {
 	error: string | null;
 	created_at: string;
 	updated_at: string;
+	ollama_prompt: string | null;
+	ollama_input: Record<string, unknown> | null;
+	ollama_output_raw: string | null;
+	ollama_output_json: Record<string, unknown> | null;
+	ollama_error: string | null;
+	ollama_used: boolean;
+	ollama_fallback_reason: string | null;
 };
 
 export type VideoCandidateRow = {
@@ -76,6 +83,7 @@ export type VideoCandidateRow = {
 	places_name: string | null;
 	places_address: string | null;
 	places_raw: Record<string, unknown> | null;
+	places_failed: boolean;
 	extraction_method: string | null;
 	llm_prompt: string | null;
 	llm_output: Record<string, unknown> | null;

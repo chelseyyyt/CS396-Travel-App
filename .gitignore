@@ -1,9 +1,15 @@
 # Node
 node_modules/
 
-# Env
+# Build outputs
+frontend/dist/
+backend/dist/
+build/
+
+# Env files (keep *.example)
 .env
 .env.*
+!.env.example
 
 # Python
 __pycache__/
@@ -15,13 +21,19 @@ worker/.venv/
 worker/*.wav
 worker/*.jpg
 worker/*.png
+worker/*.mp3
+worker/*.mp4
 
 # Uploads / generated media
 backend/uploads/
 
-# Build outputs
-frontend/dist/
-backend/dist/
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
 
-# OS
+# OS / editor
 .DS_Store
+.idea/
+.vscode/

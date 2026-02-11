@@ -10,6 +10,9 @@ import requests
 from faster_whisper import WhisperModel
 from paddleocr import PaddleOCR
 
+from ollama_extractor import extract_with_ollama
+from places_enricher import enrich_candidates_with_places
+
 
 def extract_audio(video_path: str) -> str:
     audio_path = Path(tempfile.mkdtemp(prefix='video_audio_')) / 'audio.wav'
@@ -236,57 +239,53 @@ def build_candidates(
     return enriched[:15]
 
 
-def generate_candidates_with_ollama(
-    transcript_segments: List[Dict[str, int | str]],
-    ocr_lines: List[Dict[str, int | str]],
-    location_hint: Optional[str],
-) -> Optional[Tuple[List[Dict[str, object]], str, object]]:
-    if os.getenv('USE_OLLAMA', 'false').lower() != 'true':
-        return None
-    model = os.getenv('OLLAMA_MODEL', 'qwen2.5:7b-instruct')
-    prompt = (
-        'Extract 3-15 place candidates from this video evidence. '
-        'Return JSON array of objects with name, address_hint, confidence, start_ms, end_ms, '
-        'source{transcript_snippets,ocr_snippets}. Evidence: '
-        + json.dumps(
-            {
-                'transcript': transcript_segments,
-                'ocr': ocr_lines,
-                'location_hint': location_hint,
-            }
-        )
-    )
-    payload = {
-        'model': model,
-        'prompt': prompt,
-        'stream': False,
-    }
-    try:
-        response = requests.post('http://localhost:11434/api/generate', json=payload, timeout=30)
-        response.raise_for_status()
-        text = response.json().get('response', '')
-        data = json.loads(text)
-        if isinstance(data, list):
-            return data, prompt, data
-    except Exception:
-        return None
-    return None
-
-
 def build_pipeline_candidates(
-    transcript_segments: List[Dict[str, int | str]],
-    ocr_lines: List[Dict[str, int | str]],
-    location_hint: Optional[str],
-) -> List[Dict[str, object]]:
-    llm_payload = generate_candidates_with_ollama(transcript_segments, ocr_lines, location_hint)
-    if llm_payload:
-        candidates, prompt, output = llm_payload
-        hydrated: List[Dict[str, object]] = []
-        for candidate in candidates[:15]:
-            candidate.setdefault('address_hint', location_hint)
-            candidate['extraction_method'] = 'ollama'
-            candidate['llm_prompt'] = prompt
-            candidate['llm_output'] = output
-            hydrated.append(candidate)
-        return hydrated
-    return build_candidates(transcript_segments, ocr_lines, location_hint)
+	transcript_segments: List[Dict[str, int | str]],
+	ocr_lines: List[Dict[str, int | str]],
+	location_hint: Optional[str],
+) -> Tuple[List[Dict[str, object]], Dict[str, object]]:
+	def json_safe(obj: object) -> object:
+		try:
+			json.dumps(obj)
+			return obj
+		except Exception:
+			if isinstance(obj, dict):
+				return {str(key): json_safe(value) for key, value in obj.items()}
+			if isinstance(obj, list):
+				return [json_safe(item) for item in obj]
+			return str(obj)
+
+	ollama_result = extract_with_ollama(transcript_segments, location_hint)
+	if ollama_result.used and ollama_result.candidates:
+		hydrated: List[Dict[str, object]] = []
+		for candidate in ollama_result.candidates[:12]:
+			candidate.setdefault('address_hint', location_hint)
+			candidate['extraction_method'] = 'ollama'
+			candidate['llm_prompt'] = ollama_result.prompt
+			candidate['llm_output'] = None
+			candidate['llm_output_raw'] = ollama_result.output_raw
+			hydrated.append(candidate)
+		enriched = enrich_candidates_with_places(hydrated, location_hint)
+		return enriched, {
+			'ollama_prompt': ollama_result.prompt,
+			'ollama_input': json_safe(ollama_result.input_payload),
+			'ollama_output_raw': ollama_result.output_raw,
+			'ollama_output_json': json_safe(ollama_result.output_json),
+			'ollama_error': ollama_result.error,
+			'ollama_used': ollama_result.used,
+			'ollama_fallback_reason': ollama_result.fallback_reason,
+			'ollama_segment_count': ollama_result.segment_count,
+		}
+
+	candidates = build_candidates(transcript_segments, ocr_lines, location_hint)
+	enriched = enrich_candidates_with_places(candidates, location_hint)
+	return enriched, {
+		'ollama_prompt': ollama_result.prompt,
+		'ollama_input': json_safe(ollama_result.input_payload),
+		'ollama_output_raw': ollama_result.output_raw,
+		'ollama_output_json': json_safe(ollama_result.output_json),
+		'ollama_error': ollama_result.error,
+		'ollama_used': ollama_result.used,
+		'ollama_fallback_reason': ollama_result.fallback_reason or 'heuristic_fallback',
+		'ollama_segment_count': ollama_result.segment_count,
+	}

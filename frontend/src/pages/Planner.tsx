@@ -9,6 +9,7 @@ import {
 	getVideo,
 	getVideoDebug,
 	listPins,
+	addCandidatesToTrip,
 	uploadTripVideo,
 } from '../services/api';
 import type { Pin as ApiPin, VideoCandidate, VideoJob } from '../services/api';
@@ -54,9 +55,13 @@ export default function Planner() {
 		video: { id: string } | null;
 		job: VideoJob | null;
 		candidates: VideoCandidate[];
-		transcript: { transcript: Record<string, unknown> } | null;
+		transcript: Array<{ start_ms?: number; end_ms?: number; text?: string }> | null;
+		transcript_segment_count: number;
+		transcript_text: string;
 	} | null>(null);
 	const [debugLoading, setDebugLoading] = useState(false);
+	const [transcriptExpanded, setTranscriptExpanded] = useState(false);
+	const [showTranscriptJson, setShowTranscriptJson] = useState(false);
 
 	const initialPins = useMemo(() => pins, [pins]);
 
@@ -147,7 +152,10 @@ export default function Planner() {
 
 	useEffect(() => {
 		if (hasAutoSelected || videoCandidates.length === 0) return;
-		setSelectedCandidates(new Set(videoCandidates.map(candidate => candidate.id)));
+		const selectable = videoCandidates
+			.filter(candidate => candidate.latitude != null && candidate.longitude != null)
+			.map(candidate => candidate.id);
+		setSelectedCandidates(new Set(selectable));
 		setHasAutoSelected(true);
 	}, [hasAutoSelected, videoCandidates]);
 
@@ -230,12 +238,22 @@ export default function Planner() {
 		if (!videoId || !tripId) return;
 		const ids = Array.from(selectedCandidates);
 		if (ids.length === 0) return;
+		console.log('[planner] add selected', { tripId, candidateIds: ids });
 
-		const res = await approveVideoCandidates(videoId, ids);
+		const res = await addCandidatesToTrip(tripId, ids);
 		if (res.data) {
 			await refreshPins(tripId);
 		} else {
-			setErrorMessage('Could not add pins from video candidates.');
+			console.error('[planner] add selected failed', {
+				tripId,
+				candidateIds: ids,
+				error: res.error,
+			});
+			const message =
+				typeof res.error === 'string'
+					? res.error
+					: 'Could not add pins from video candidates.';
+			setErrorMessage(message);
 		}
 	}, [refreshPins, selectedCandidates, tripId, videoId]);
 
@@ -256,11 +274,18 @@ export default function Planner() {
 		const res = await getVideoDebug(videoId);
 		if (res.data) {
 			setDebugData(res.data);
+			// Temporary visibility check
+			console.log('[video-debug]', Object.keys(res.data), res.data.transcript?.length ?? 0);
 		} else {
 			setErrorMessage('Could not load debug data.');
 		}
 		setDebugLoading(false);
 	}, [showDebug, videoId]);
+
+	const handleCopyTranscript = useCallback(() => {
+		if (!debugData?.transcript_text) return;
+		void navigator.clipboard.writeText(debugData.transcript_text);
+	}, [debugData]);
 
 	const parsePinMeta = useCallback((pin: MapPin) => {
 		if (!pin.notes) return { source: 'manual', address: null };
@@ -379,6 +404,7 @@ export default function Planner() {
 										type="checkbox"
 										checked={selectedCandidates.has(candidate.id)}
 										onChange={() => toggleCandidate(candidate.id)}
+										disabled={candidate.latitude == null || candidate.longitude == null}
 										className="mt-0.5"
 									/>
 									<span>
@@ -387,6 +413,9 @@ export default function Planner() {
 										<span className="ml-1 text-[10px] text-slate-400">
 											{Math.round(candidate.confidence * 100)}%
 										</span>
+										{candidate.latitude == null || candidate.longitude == null ? (
+											<span className="ml-2 text-[10px] text-amber-500">No coordinates</span>
+										) : null}
 									</span>
 								</label>
 							))}
@@ -430,10 +459,51 @@ export default function Planner() {
 									</div>
 									{debugData.transcript ? (
 										<div>
-											<p className="font-semibold text-slate-700">Full transcript</p>
-											<pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md bg-white p-2 text-[11px] text-slate-600">
-												{JSON.stringify(debugData.transcript.transcript, null, 2)}
-											</pre>
+											<div className="flex items-center justify-between">
+												<p className="font-semibold text-slate-700">
+													Transcript ({debugData.transcript_segment_count} segments)
+												</p>
+												<div className="flex items-center gap-2">
+													<button
+														type="button"
+														onClick={() => setTranscriptExpanded(prev => !prev)}
+														className="text-[11px] font-medium text-slate-600 hover:text-slate-800"
+													>
+														{transcriptExpanded ? 'Collapse' : 'Expand'}
+													</button>
+													<button
+														type="button"
+														onClick={() => setShowTranscriptJson(prev => !prev)}
+														className="text-[11px] font-medium text-slate-600 hover:text-slate-800"
+													>
+														{showTranscriptJson ? 'Hide JSON' : 'Raw JSON'}
+													</button>
+													<button
+														type="button"
+														onClick={handleCopyTranscript}
+														className="text-[11px] font-medium text-slate-600 hover:text-slate-800"
+													>
+														Copy transcript
+													</button>
+												</div>
+											</div>
+											{transcriptExpanded ? (
+												<pre className="mt-2 max-h-52 overflow-y-auto whitespace-pre-wrap rounded-md bg-white p-2 text-[11px] text-slate-600">
+													{debugData.transcript
+														.map(segment => {
+															const start = segment.start_ms ?? 0;
+															const end = segment.end_ms ?? 0;
+															const text = segment.text ?? '';
+															return `[${start}-${end}] ${text}`.trim();
+														})
+														.join('\n')}
+												</pre>
+											) : null}
+											{showTranscriptJson ? (
+												<pre className="mt-2 max-h-52 overflow-y-auto whitespace-pre-wrap rounded-md bg-white p-2 text-[11px] text-slate-600">
+													{JSON.stringify(debugData.transcript, null, 2)}
+												</pre>
+											) : null}
 										</div>
 									) : null}
 									<div>
@@ -457,9 +527,63 @@ export default function Planner() {
 													{candidate.places_address ? `· ${candidate.places_address}` : ''}
 												</p>
 												<p>Extraction: {candidate.extraction_method ?? 'n/a'}</p>
+												{candidate.llm_prompt ? (
+													<details className="mt-2">
+														<summary className="cursor-pointer text-[11px] font-medium text-slate-600">
+															Ollama prompt
+														</summary>
+														<pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md bg-slate-50 p-2 text-[11px] text-slate-600">
+															{candidate.llm_prompt}
+														</pre>
+													</details>
+												) : null}
+												{candidate.llm_output ? (
+													<details className="mt-2">
+														<summary className="cursor-pointer text-[11px] font-medium text-slate-600">
+															Ollama output
+														</summary>
+														<pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md bg-slate-50 p-2 text-[11px] text-slate-600">
+															{JSON.stringify(candidate.llm_output, null, 2)}
+														</pre>
+													</details>
+												) : null}
 											</div>
 										))}
 									</div>
+									{debugData.job ? (
+										<div className="rounded-md border border-slate-200 bg-white p-2">
+											<p className="font-semibold text-slate-700">Ollama run</p>
+											<p>Used: {String(debugData.job.ollama_used)}</p>
+											<p>Fallback: {debugData.job.ollama_fallback_reason ?? 'none'}</p>
+											<p>Error: {debugData.job.ollama_error ?? 'none'}</p>
+											<details className="mt-2">
+												<summary className="cursor-pointer text-[11px] font-medium text-slate-600">
+													Ollama prompt
+												</summary>
+												<pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md bg-slate-50 p-2 text-[11px] text-slate-600">
+													{debugData.job.ollama_prompt ?? ''}
+												</pre>
+											</details>
+											<details className="mt-2">
+												<summary className="cursor-pointer text-[11px] font-medium text-slate-600">
+													Ollama output raw
+												</summary>
+												<pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md bg-slate-50 p-2 text-[11px] text-slate-600">
+													{debugData.job.ollama_output_raw ?? ''}
+												</pre>
+											</details>
+											{debugData.job.ollama_output_json ? (
+												<details className="mt-2">
+													<summary className="cursor-pointer text-[11px] font-medium text-slate-600">
+														Ollama output JSON
+													</summary>
+													<pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md bg-slate-50 p-2 text-[11px] text-slate-600">
+														{JSON.stringify(debugData.job.ollama_output_json, null, 2)}
+													</pre>
+												</details>
+											) : null}
+										</div>
+									) : null}
 								</div>
 							) : (
 								<p>No debug data yet.</p>

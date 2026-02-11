@@ -223,16 +223,88 @@ videosRouter.get('/videos/:videoId/debug', async (req, res) => {
 			return res.status(500).json({ data: null, error: candidateError.message });
 		}
 
+		const { data: transcriptRow, error: transcriptError } = await supabase
+			.from<VideoTranscriptRow>('video_transcripts')
+			.select('transcript')
+			.eq('video_id', videoId)
+			.maybeSingle();
+
+		if (transcriptError) {
+			console.error('[video-debug] transcript fetch error', transcriptError.message);
+			return res.status(500).json({ data: null, error: transcriptError.message });
+		}
+
+		const transcript = (transcriptRow?.transcript ?? null) as Array<{
+			start_ms?: number;
+			end_ms?: number;
+			text?: string;
+		}> | null;
+		const transcriptSegmentCount = transcript ? transcript.length : 0;
+		const transcriptText = transcript
+			? transcript
+					.map(segment => {
+						const start = segment.start_ms ?? 0;
+						const end = segment.end_ms ?? 0;
+						const text = segment.text ?? '';
+						return `[${start}-${end}] ${text}`.trim();
+					})
+					.join('\n')
+			: '';
+
 		return res.status(200).json({
 			data: {
 				video,
 				job: jobs?.[0] ?? null,
 				candidates: candidates ?? [],
+				transcript,
+				transcript_segment_count: transcriptSegmentCount,
+				transcript_text: transcriptText,
 			},
 			error: null,
 		});
 	} catch (_e) {
 		return res.status(500).json({ data: null, error: 'Internal server error' });
+	}
+});
+
+// Dev-only transcript export
+videosRouter.get('/videos/:videoId/transcript.txt', async (req, res) => {
+	try {
+		const videoIdParse = videoIdSchema.safeParse(req.params.videoId);
+		if (!videoIdParse.success) {
+			return res.status(400).json({ data: null, error: 'videoId must be a valid UUID' });
+		}
+		const videoId = videoIdParse.data;
+
+		const { data: transcriptRow, error: transcriptError } = await supabase
+			.from<VideoTranscriptRow>('video_transcripts')
+			.select('transcript')
+			.eq('video_id', videoId)
+			.maybeSingle();
+
+		if (transcriptError) {
+			console.error('[video-transcript] fetch error', transcriptError.message);
+			return res.status(500).send('Transcript fetch error');
+		}
+
+		const transcript = (transcriptRow?.transcript ?? []) as Array<{
+			start_ms?: number;
+			end_ms?: number;
+			text?: string;
+		}>;
+		const transcriptText = transcript
+			.map(segment => {
+				const start = segment.start_ms ?? 0;
+				const end = segment.end_ms ?? 0;
+				const text = segment.text ?? '';
+				return `[${start}-${end}] ${text}`.trim();
+			})
+			.join('\n');
+
+		res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+		return res.status(200).send(transcriptText);
+	} catch (_e) {
+		return res.status(500).send('Internal server error');
 	}
 });
 

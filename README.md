@@ -8,13 +8,16 @@ A website-first trip planning web application that allows users to search for lo
 - **Backend**: Node.js + Express + TypeScript
 - **Database**: PostgreSQL via Supabase
 - **Maps**: Google Maps JavaScript API + Google Places API
+- **Worker**: Python (ffmpeg + faster-whisper + PaddleOCR + optional Ollama)
 
 ## Prerequisites
 
 - Node.js (v18 or higher)
 - npm or yarn
+- Python 3.10+
 - Supabase account and project
 - Google Maps API key with Places API enabled
+- ffmpeg (for audio + frame extraction)
 
 ## Setup
 
@@ -30,6 +33,14 @@ npm install
 ```bash
 cd backend
 npm install
+```
+
+**Worker:**
+```bash
+cd worker
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
 ### 2. Environment Variables
@@ -48,6 +59,7 @@ PORT=5000
 CORS_ORIGIN=http://localhost:5173
 UPLOADS_DIR=/absolute/path/to/backend/uploads
 GOOGLE_MAPS_API_KEY=your_google_maps_api_key
+# or GOOGLE_PLACES_API_KEY
 ```
 
 **Worker** (`worker/.env`):
@@ -57,30 +69,26 @@ SUPABASE_SERVICE_KEY=your_supabase_service_role_key
 UPLOADS_DIR=/absolute/path/to/backend/uploads
 WHISPER_MODEL=base
 OCR_LANG=en
-USE_OLLAMA=false
+USE_OLLAMA=true
 OLLAMA_MODEL=qwen2.5:7b-instruct
+GOOGLE_MAPS_API_KEY=your_google_maps_api_key
+# or GOOGLE_PLACES_API_KEY
 ```
 
 Tip: adding a location hint (city/region) when uploading a video improves candidate accuracy.
 
 ### 3. Database Setup
 
-1. Go to your Supabase dashboard → SQL Editor
-2. Copy the contents of `db/migrations/001_init.sql`
-3. Paste and execute it to create the tables
-4. Copy the contents of `db/migrations/002_video_pipeline.sql`
-5. Paste and execute it to create the video pipeline tables
-6. Copy the contents of `db/migrations/003_video_location_hint.sql`
-7. Paste and execute it to create the location hint column
-
-Or use Supabase CLI:
-```bash
-supabase db push
-```
+Run migrations in order:
+- `db/migrations/001_init.sql`
+- `db/migrations/002_video_pipeline.sql`
+- `db/migrations/003_video_location_hint.sql`
+- `db/migrations/004_video_candidate_debug.sql`
+- `db/migrations/005_video_transcripts.sql`
+- `db/migrations/006_video_jobs_ollama_logging.sql`
+- `db/migrations/007_video_candidates_places_failed.sql`
 
 ## Running the Application
-
-### Development Mode
 
 **Terminal 1 - Backend:**
 ```bash
@@ -88,51 +96,71 @@ cd backend
 npm run dev
 ```
 
-The backend will start on `http://localhost:5000`
-
 **Terminal 2 - Frontend:**
 ```bash
 cd frontend
 npm run dev
 ```
 
-The frontend will start on `http://localhost:5173` (or the port Vite assigns)
-
 **Terminal 3 - Worker:**
 ```bash
 cd worker
-python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+export USE_OLLAMA=true             
+export OLLAMA_BASE_URL=http://localhost:11434
+export OLLAMA_MODEL=llama3.1:8b
 python worker.py
 ```
 
-## Local extraction setup
+## Pipeline Overview
 
-- Install ffmpeg:
-```bash
-brew install ffmpeg
-```
-- Install worker deps:
-```bash
-cd worker
-pip install -r requirements.txt
+1) **Upload video** → stored in `backend/uploads/` and queued in `video_jobs`.
+2) **Worker** extracts:
+   - audio → transcript segments (faster-whisper)
+   - frames → OCR lines (PaddleOCR)
+3) **Candidate extraction**:
+   - Heuristic extraction (keywords + patterns)
+   - Optional Ollama extraction (strict JSON)
+4) **Places enrichment**:
+   - For each candidate, run Google Places Text Search
+   - Attach `places_name`, `places_place_id`, `places_address`, `lat/lng`
+5) **Approval flow**:
+   - Candidates shown in Planner
+   - “Add selected to map” inserts pins for candidates with coords
+
+## Debugging
+
+### Logs to watch
+- Worker:
+  - `[worker] places enrichment ...`
+  - `[worker] places result ...`
+  - `[worker] candidate payload sample ...`
+  - `[worker] job failed ...` (with traceback)
+- Backend:
+  - `[pins] create request ...`
+  - `[pins] validation error ...`
+
+### Useful SQL
+```sql
+-- Inspect candidates for a video
+select id, name, places_name, places_place_id, latitude, longitude, places_failed
+from video_candidates
+where video_id = '<video_id>'
+order by confidence desc;
+
+-- Inspect transcript
+select transcript
+from video_transcripts
+where video_id = '<video_id>'
+order by created_at desc
+limit 1;
 ```
 
-## Production Build
+## Known Issues / TODO
 
-**Frontend:**
-```bash
-cd frontend
-npm run build
-npm run preview
-```
-
-**Backend:**
-```bash
-cd backend
-npm start
-```
+- Places enrichment sometimes does not persist lat/lng to DB.
+- Candidates may be inserted without coordinates when Places lookup fails.
+- Add-to-map is blocked when coords are missing (by design).
 
 ## Project Structure
 
@@ -155,12 +183,6 @@ TravelApp/
     └── API_DOCS.md   # API documentation
 ```
 
-## Pages
-
-- **Home** (`/`) - Landing page with product description and CTA
-- **Planner** (`/planner`) - Interactive map for searching and pinning locations
-- **About** (`/about`) - About page with feature information
-
 ## API Endpoints
 
 See `docs/API_DOCS.md` for complete API documentation.
@@ -177,25 +199,16 @@ Base URL: `http://localhost:5000`
 - `GET /api/videos/:videoId` - Get video status + candidates
 - `POST /api/videos/:videoId/approve` - Convert candidates into pins
 
-## Development
-
-- Follow `.cursorrules` for coding conventions
-- See `docs/PDR.md` for architecture and requirements
-- MVP scope: search → pin → save → view trip
-
 ## Testing
 
-Run backend tests:
+**Backend:**
 ```bash
 cd backend
 npm test
 ```
 
-Run frontend tests:
+**Worker (pytest):**
 ```bash
-cd frontend
-npm test
+cd worker
+pytest
 ```
-# TravelApp
-# TravelApp
-# TravelApp
