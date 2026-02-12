@@ -38,6 +38,8 @@ export type PinRow = {
 	longitude: number;
 	place_id: string;
 	notes: string | null;
+	notes_text: string | null;
+	updated_at: string | null;
 };
 
 export type VideoRow = {

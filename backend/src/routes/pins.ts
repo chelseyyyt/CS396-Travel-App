@@ -15,6 +15,10 @@ const pinCreateSchema = z.object({
 	notes: z.string().max(2000).optional().nullable(),
 });
 
+const pinNotesSchema = z.object({
+	notes_text: z.string().max(5000),
+});
+
 const candidateIdsSchema = z.object({
 	candidate_ids: z.array(z.string().uuid()).min(1),
 });
@@ -184,6 +188,33 @@ pinsRouter.delete('/pins/:pinId', async (req, res) => {
 			return res.status(404).json({ data: null, error: 'Pin not found' });
 		}
 		return res.status(200).json({ data: { deleted: true }, error: null });
+	} catch (_e) {
+		return res.status(500).json({ data: null, error: 'Internal server error' });
+	}
+});
+
+// Update pin notes
+pinsRouter.patch('/pins/:pinId', async (req, res) => {
+	try {
+		const pinIdParse = pinIdSchema.safeParse(req.params.pinId);
+		if (!pinIdParse.success) {
+			return res.status(400).json({ data: null, error: 'pinId must be a valid UUID' });
+		}
+		const parsed = pinNotesSchema.safeParse(req.body);
+		if (!parsed.success) {
+			return res.status(400).json({ data: null, error: parsed.error.flatten() });
+		}
+
+		const notesText = parsed.data.notes_text.trim();
+		const { data, error } = await supabase
+			.from<PinRow>('pins')
+			.update({ notes_text: notesText, updated_at: new Date().toISOString() })
+			.eq('id', pinIdParse.data)
+			.select()
+			.single();
+
+		if (error) return res.status(500).json({ data: null, error: error.message });
+		return res.status(200).json({ data, error: null });
 	} catch (_e) {
 		return res.status(500).json({ data: null, error: 'Internal server error' });
 	}

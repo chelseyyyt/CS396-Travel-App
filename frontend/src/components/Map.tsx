@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 /// <reference types="@types/google.maps" />
 
@@ -10,6 +10,7 @@ export type MapPin = {
 	name?: string;
 	placeId?: string;
 	notes?: string;
+	notesText?: string;
 	clientId?: string;
 };
 
@@ -20,8 +21,10 @@ type MapProps = {
 	initialPins?: MapPin[];
 	pins?: MapPin[];
 	selectedPinId?: string | null;
+	selectedPinCoords?: { lat: number; lng: number } | null;
 	onPinAdd?: (pin: MapPin) => Promise<MapPin | void> | void;
 	onPinDelete?: (pinId: string) => void;
+	onPinSelect?: (pinId: string) => void;
 };
 
 // Type declarations for Google Maps (loaded dynamically)
@@ -69,6 +72,8 @@ async function loadGoogleMaps(apiKey: string, libraries: string[] = ['places']):
 	});
 }
 
+const DEFAULT_CENTER = { lat: 37.7749, lng: -122.4194 };
+
 export const GoogleMap: React.FC<MapProps> = ({
 	apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '',
 	initialCenter,
@@ -76,20 +81,27 @@ export const GoogleMap: React.FC<MapProps> = ({
 	initialPins = [],
 	pins: controlledPins,
 	selectedPinId,
+	selectedPinCoords,
 	onPinAdd,
 	onPinDelete,
+	onPinSelect,
 }) => {
+	const devLog = useCallback((...args: unknown[]) => {
+		if (import.meta.env.DEV) {
+			// eslint-disable-next-line no-console
+			console.log('[map]', ...args);
+		}
+	}, []);
+	const defaultCenter = initialCenter ?? DEFAULT_CENTER;
 	const mapContainerRef = useRef<HTMLDivElement | null>(null);
 	const searchInputRef = useRef<HTMLInputElement | null>(null);
 	const mapRef = useRef<any>(null);
-	const markersRef = useRef<Map<string, { marker: any; pin: MapPin; infoWindow: any | null }>>(
-		new window.Map()
-	);
+	const markersRef = useRef<Map<string, { marker: any; pin: MapPin }>>(new Map());
+	const hasInitializedRef = useRef(false);
+	const addMarkerRef = useRef<((position: { lat: number; lng: number }, meta?: { name?: string; placeId?: string }) => void) | null>(null);
 
 	const [isReady, setIsReady] = useState(false);
 	const [pins, setPins] = useState<MapPin[]>([]);
-
-	const defaultCenter = useMemo(() => initialCenter ?? { lat: 37.7749, lng: -122.4194 }, [initialCenter]);
 
 	const createClientId = useCallback(() => {
 		if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -102,44 +114,19 @@ export const GoogleMap: React.FC<MapProps> = ({
 		return pin.clientId ?? pin.id ?? `${pin.latitude},${pin.longitude},${pin.placeId ?? ''}`;
 	}, []);
 
-	const buildInfoWindowContent = useCallback(
-		(pin: MapPin) => {
-			const wrapper = document.createElement('div');
-			wrapper.className = 'map-pin-info';
-			const title = document.createElement('div');
-			title.textContent = pin.name ?? 'Pinned place';
-			title.style.fontWeight = '600';
-			title.style.marginBottom = '4px';
-
-			const meta = document.createElement('div');
-			meta.textContent = pin.notes ?? '';
-			meta.style.fontSize = '12px';
-			meta.style.color = '#475569';
-
-			wrapper.appendChild(title);
-			if (pin.notes) {
-				wrapper.appendChild(meta);
-			}
-
-			if (pin.id && onPinDelete) {
-				const button = document.createElement('button');
-				button.type = 'button';
-				button.textContent = 'Delete pin';
-				button.style.marginTop = '8px';
-				button.style.padding = '4px 8px';
-				button.style.fontSize = '12px';
-				button.style.border = '1px solid #e2e8f0';
-				button.style.borderRadius = '6px';
-				button.style.background = '#fff';
-				button.style.cursor = 'pointer';
-				button.addEventListener('click', () => onPinDelete(pin.id!));
-				wrapper.appendChild(button);
-			}
-
-			return wrapper;
-		},
-		[onPinDelete]
-	);
+	const buildMarkerIcon = useCallback((isSelected: boolean) => {
+		const fill = isSelected ? '#0f172a' : '#2563eb';
+		const svg = `
+			<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="${fill}">
+				<path d="M12 2c-3.86 0-7 3.14-7 7 0 5.25 7 13 7 13s7-7.75 7-13c0-3.86-3.14-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5S10.62 6.5 12 6.5s2.5 1.12 2.5 2.5S13.38 11.5 12 11.5z"/>
+			</svg>
+		`;
+		return {
+			url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
+			scaledSize: new window.google.maps.Size(30, 30),
+			anchor: new window.google.maps.Point(15, 30),
+		};
+	}, []);
 
 	const createMarkerForPin = useCallback(
 		(pin: MapPin) => {
@@ -151,18 +138,19 @@ export const GoogleMap: React.FC<MapProps> = ({
 				position: { lat: pin.latitude, lng: pin.longitude },
 				map: mapRef.current,
 				title: pin.name ?? undefined,
-				label: pin.name ? { text: pin.name.slice(0, 14), fontSize: '11px', fontWeight: '600' } : undefined,
+				icon: buildMarkerIcon(pin.id === selectedPinId),
+				label: pin.name ? { text: pin.name.slice(0, 12), fontSize: '10px', fontWeight: '600' } : undefined,
 			});
 
-			const infoWindow = new window.google.maps.InfoWindow({ content: buildInfoWindowContent(pin) });
 			marker.addListener('click', () => {
-				infoWindow.setContent(buildInfoWindowContent(pin));
-				infoWindow.open({ anchor: marker, map: mapRef.current });
+				if (pin.id && onPinSelect) {
+					onPinSelect(pin.id);
+				}
 			});
 
-			markersRef.current.set(key, { marker, pin, infoWindow });
+			markersRef.current.set(key, { marker, pin });
 		},
-		[buildInfoWindowContent, getPinKey]
+		[buildMarkerIcon, getPinKey, onPinSelect, selectedPinId]
 	);
 
 	const syncMarkers = useCallback(
@@ -185,12 +173,13 @@ export const GoogleMap: React.FC<MapProps> = ({
 				existing.pin = pin;
 				existing.marker.setPosition({ lat: pin.latitude, lng: pin.longitude });
 				existing.marker.setTitle(pin.name ?? '');
+				existing.marker.setIcon(buildMarkerIcon(pin.id === selectedPinId));
 				if (pin.name) {
-					existing.marker.setLabel({ text: pin.name.slice(0, 14), fontSize: '11px', fontWeight: '600' });
+					existing.marker.setLabel({ text: pin.name.slice(0, 12), fontSize: '10px', fontWeight: '600' });
 				}
 			});
 		},
-		[createMarkerForPin, getPinKey]
+		[buildMarkerIcon, createMarkerForPin, getPinKey, selectedPinId]
 	);
 
 	const addMarkerForPin = useCallback(
@@ -233,6 +222,11 @@ export const GoogleMap: React.FC<MapProps> = ({
 	);
 
 	useEffect(() => {
+		// Assign in effect to avoid TDZ issues with const function definitions.
+		addMarkerRef.current = addMarker;
+	}, [addMarker]);
+
+	useEffect(() => {
 		if (!isReady || initialPins.length === 0) return;
 		initialPins.forEach(pin => {
 			void addMarkerForPin(pin, false);
@@ -241,6 +235,10 @@ export const GoogleMap: React.FC<MapProps> = ({
 
 	useEffect(() => {
 		if (!isReady) return;
+		if (!mapRef.current) {
+			devLog('skip marker sync: map not ready');
+			return;
+		}
 		const nextPins = controlledPins ?? pins;
 		syncMarkers(nextPins);
 	}, [controlledPins, isReady, pins, syncMarkers]);
@@ -252,19 +250,48 @@ export const GoogleMap: React.FC<MapProps> = ({
 	}, [controlledPins]);
 
 	useEffect(() => {
-		if (!selectedPinId || !mapRef.current) return;
-		const entry = Array.from(markersRef.current.values()).find(item => item.pin.id === selectedPinId);
-		if (!entry) return;
-		mapRef.current.panTo({ lat: entry.pin.latitude, lng: entry.pin.longitude });
-		mapRef.current.setZoom(14);
-		entry.infoWindow?.setContent(buildInfoWindowContent(entry.pin));
-		entry.infoWindow?.open({ anchor: entry.marker, map: mapRef.current });
-	}, [buildInfoWindowContent, selectedPinId]);
+		if (!mapRef.current) return;
+		if (selectedPinCoords) {
+			const lat = Number(selectedPinCoords.lat);
+			const lng = Number(selectedPinCoords.lng);
+			if (Number.isFinite(lat) && Number.isFinite(lng)) {
+				devLog('pan to selected pin coords', { lat, lng });
+				mapRef.current.panTo({ lat, lng });
+				mapRef.current.setZoom(15);
+			} else {
+				devLog('skip pan: selectedPinCoords invalid', selectedPinCoords);
+			}
+			return;
+		}
+		if (!selectedPinId) return;
+		const mergedPins = [...(controlledPins ?? []), ...pins];
+		const selectedPin = mergedPins.find(pin => pin.id === selectedPinId);
+		if (!selectedPin) return;
+		if (
+			selectedPin.latitude == null ||
+			selectedPin.longitude == null ||
+			selectedPin.latitude === '' ||
+			selectedPin.longitude === ''
+		) {
+			devLog('selected pin missing coords', selectedPin);
+			return;
+		}
+		const lat = Number(selectedPin.latitude);
+		const lng = Number(selectedPin.longitude);
+		if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+			devLog('selected pin invalid coords', { lat, lng, selectedPin });
+			return;
+		}
+		devLog('pan to selected pin', { id: selectedPinId, lat, lng });
+		mapRef.current.panTo({ lat, lng });
+		mapRef.current.setZoom(15);
+	}, [controlledPins, devLog, pins, selectedPinCoords, selectedPinId]);
 
 	useEffect(() => {
 		let mapClickListener: any = null;
 
 		async function init() {
+			if (hasInitializedRef.current) return;
 			if (!apiKey) return;
 			try {
 				await loadGoogleMaps(apiKey, ['places']);
@@ -277,11 +304,19 @@ export const GoogleMap: React.FC<MapProps> = ({
 					streetViewControl: false,
 					fullscreenControl: false,
 				});
+				if (!mapRef.current) {
+					devLog('map init warning: mapRef.current is null after init');
+					return;
+				}
 
 				// Click to drop a marker
 				mapClickListener = mapRef.current.addListener('click', (e: any) => {
 					if (!e.latLng) return;
-					addMarker({ lat: e.latLng.lat(), lng: e.latLng.lng() });
+					if (!addMarkerRef.current) {
+						devLog('skip add marker: addMarkerRef missing');
+						return;
+					}
+					addMarkerRef.current?.({ lat: e.latLng.lat(), lng: e.latLng.lng() });
 				});
 
 				// Setup Places Autocomplete
@@ -296,13 +331,19 @@ export const GoogleMap: React.FC<MapProps> = ({
 							lat: place.geometry.location.lat(),
 							lng: place.geometry.location.lng(),
 						};
+						devLog('pan to search result', position);
 						mapRef.current?.panTo(position);
-						mapRef.current?.setZoom(14);
-						addMarker(position, { name: place.name ?? undefined, placeId: place.place_id });
+						mapRef.current?.setZoom(15);
+						if (!addMarkerRef.current) {
+							devLog('skip add marker from search: addMarkerRef missing');
+							return;
+						}
+						addMarkerRef.current?.(position, { name: place.name ?? undefined, placeId: place.place_id });
 					});
 				}
 
 				setIsReady(true);
+				hasInitializedRef.current = true;
 			} catch (_err) {
 				// Intentionally no-op: UI will remain but map won't initialize
 			}
@@ -314,10 +355,12 @@ export const GoogleMap: React.FC<MapProps> = ({
 			if (mapClickListener) {
 				mapClickListener.remove();
 			}
+			if (!hasInitializedRef.current) return;
+			// only clean up markers on unmount
 			markersRef.current.forEach(entry => entry.marker.setMap(null));
 			markersRef.current.clear();
 		};
-	}, [apiKey, defaultCenter, initialZoom, addMarker]);
+	}, [apiKey, initialZoom, devLog]);
 
 	return (
 		<div className="relative h-screen w-full">

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import GoogleMap from '../components/Map';
 import type { MapPin } from '../components/Map';
 import {
@@ -11,6 +11,7 @@ import {
 	listPins,
 	addCandidatesToTrip,
 	uploadTripVideo,
+	updatePinNotes,
 } from '../services/api';
 import type { Pin as ApiPin, VideoCandidate, VideoJob } from '../services/api';
 
@@ -34,6 +35,7 @@ function mapApiPin(pin: ApiPin): MapPin {
 		longitude: pin.longitude,
 		placeId: pin.place_id || undefined,
 		notes: pin.notes || undefined,
+		notesText: pin.notes_text || undefined,
 	};
 }
 
@@ -50,6 +52,32 @@ export default function Planner() {
 	const [selectedFile, setSelectedFile] = useState<File | null>(null);
 	const [locationHint, setLocationHint] = useState('');
 	const [selectedPinId, setSelectedPinId] = useState<string | null>(null);
+	const [selectedPinCoords, setSelectedPinCoords] = useState<{ lat: number; lng: number } | null>(null);
+	const [notesDraft, setNotesDraft] = useState('');
+	const [isSavingNotes, setIsSavingNotes] = useState(false);
+	const [notesStatus, setNotesStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+	const notesSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const lastSavedNotesRef = useRef<string>('');
+	const isHydratingDraftRef = useRef(false);
+	const activeSavePinIdRef = useRef<string | null>(null);
+	const [panelPos, setPanelPos] = useState<{ x: number; y: number }>(() => {
+		const stored = localStorage.getItem('travelapp_pin_panel_pos');
+		if (stored) {
+			try {
+				return JSON.parse(stored) as { x: number; y: number };
+			} catch {
+				// ignore
+			}
+		}
+		return { x: window.innerWidth - 360, y: window.innerHeight - 320 };
+	});
+	const dragStateRef = useRef<{
+		startX: number;
+		startY: number;
+		originX: number;
+		originY: number;
+		pointerId: number | null;
+	}>({ startX: 0, startY: 0, originX: 0, originY: 0, pointerId: null });
 	const [showDebug, setShowDebug] = useState(false);
 	const [debugData, setDebugData] = useState<{
 		video: { id: string } | null;
@@ -294,6 +322,119 @@ export default function Planner() {
 		return { source, address: address ?? null };
 	}, []);
 
+	const selectedPin = useMemo(() => pins.find(pin => pin.id === selectedPinId) ?? null, [pins, selectedPinId]);
+
+	useEffect(() => {
+		if (!selectedPin) return;
+		isHydratingDraftRef.current = true;
+		const nextNotes = selectedPin.notesText ?? '';
+		setNotesDraft(nextNotes);
+		lastSavedNotesRef.current = nextNotes;
+		setNotesStatus('idle');
+		if (notesSaveTimerRef.current) {
+			clearTimeout(notesSaveTimerRef.current);
+		}
+		isHydratingDraftRef.current = false;
+	}, [selectedPin]);
+
+	const handleSaveNotes = useCallback(async () => {
+		if (!selectedPin?.id) return;
+		const pinId = selectedPin.id;
+		activeSavePinIdRef.current = pinId;
+		setIsSavingNotes(true);
+		setNotesStatus('saving');
+		const res = await updatePinNotes(pinId, notesDraft);
+		if (activeSavePinIdRef.current !== pinId) {
+			setIsSavingNotes(false);
+			return;
+		}
+		if (res.data) {
+			setPins(prev => prev.map(pin => (pin.id === pinId ? mapApiPin(res.data!) : pin)));
+			lastSavedNotesRef.current = notesDraft;
+			setNotesStatus('saved');
+			setTimeout(() => setNotesStatus('idle'), 1200);
+		} else {
+			setNotesStatus('error');
+		}
+		setIsSavingNotes(false);
+	}, [notesDraft, selectedPin]);
+
+	useEffect(() => {
+		if (!selectedPin?.id) return;
+		if (isHydratingDraftRef.current) return;
+		if (notesDraft === lastSavedNotesRef.current) return;
+		if (notesSaveTimerRef.current) {
+			clearTimeout(notesSaveTimerRef.current);
+		}
+		setNotesStatus('idle');
+		notesSaveTimerRef.current = setTimeout(() => {
+			void handleSaveNotes();
+		}, 800);
+
+		return () => {
+			if (notesSaveTimerRef.current) {
+				clearTimeout(notesSaveTimerRef.current);
+			}
+		};
+	}, [handleSaveNotes, notesDraft, selectedPin?.id]);
+
+	const clampPanelPos = useCallback((x: number, y: number) => {
+		const width = 320;
+		const height = 260;
+		const maxX = Math.max(0, window.innerWidth - width);
+		const maxY = Math.max(0, window.innerHeight - height);
+		return {
+			x: Math.min(Math.max(0, x), maxX),
+			y: Math.min(Math.max(0, y), maxY),
+		};
+	}, []);
+
+	const persistPanelPos = useCallback((pos: { x: number; y: number }) => {
+		localStorage.setItem('travelapp_pin_panel_pos', JSON.stringify(pos));
+	}, []);
+
+	const handlePanelPointerDown = useCallback(
+		(event: React.PointerEvent<HTMLDivElement>) => {
+			event.preventDefault();
+			event.stopPropagation();
+			const target = event.currentTarget;
+			target.setPointerCapture(event.pointerId);
+			dragStateRef.current = {
+				startX: event.clientX,
+				startY: event.clientY,
+				originX: panelPos.x,
+				originY: panelPos.y,
+				pointerId: event.pointerId,
+			};
+		},
+		[panelPos.x, panelPos.y]
+	);
+
+	const handlePanelPointerMove = useCallback(
+		(event: React.PointerEvent<HTMLDivElement>) => {
+			if (dragStateRef.current.pointerId !== event.pointerId) return;
+			event.preventDefault();
+			const deltaX = event.clientX - dragStateRef.current.startX;
+			const deltaY = event.clientY - dragStateRef.current.startY;
+			const next = clampPanelPos(dragStateRef.current.originX + deltaX, dragStateRef.current.originY + deltaY);
+			setPanelPos(next);
+		},
+		[clampPanelPos]
+	);
+
+	const handlePanelPointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+		if (dragStateRef.current.pointerId !== event.pointerId) return;
+		event.currentTarget.releasePointerCapture(event.pointerId);
+		dragStateRef.current.pointerId = null;
+		persistPanelPos(panelPos);
+	}, [panelPos, persistPanelPos]);
+
+	const handleResetPanelPos = useCallback(() => {
+		localStorage.removeItem('travelapp_pin_panel_pos');
+		const next = { x: window.innerWidth - 360, y: window.innerHeight - 320 };
+		setPanelPos(clampPanelPos(next.x, next.y));
+	}, [clampPanelPos]);
+
 	return (
 		<div className="relative h-screen w-full">
 			{errorMessage ? (
@@ -322,7 +463,21 @@ export default function Planner() {
 									<button
 										type="button"
 										className="flex-1 text-left"
-										onClick={() => pin.id && setSelectedPinId(pin.id)}
+										onClick={() => {
+											const lat = Number(pin.latitude);
+											const lng = Number(pin.longitude);
+											if (Number.isFinite(lat) && Number.isFinite(lng)) {
+												if (import.meta.env.DEV) {
+													console.log('[planner] list pan', { id: pin.id, lat, lng });
+												}
+												setSelectedPinCoords({ lat, lng });
+											} else if (import.meta.env.DEV) {
+												console.log('[planner] list pan missing coords', { id: pin.id, lat, lng });
+											}
+											if (pin.id) {
+												setSelectedPinId(pin.id);
+											}
+										}}
 									>
 										<div className="font-semibold text-slate-900">{pin.name ?? 'Dropped Pin'}</div>
 										{meta.address ? (
@@ -592,12 +747,77 @@ export default function Planner() {
 					) : null}
 				</div>
 			</div>
+			{selectedPin ? (
+				<div
+					className="pointer-events-auto absolute z-30 w-80 max-w-[90vw] rounded-xl border border-slate-200 bg-white/95 shadow-lg backdrop-blur"
+					style={{ transform: `translate3d(${panelPos.x}px, ${panelPos.y}px, 0)` }}
+				>
+					<div
+						className="flex cursor-grab items-start justify-between rounded-t-xl border-b border-slate-200 bg-slate-50 px-4 py-2 active:cursor-grabbing"
+						onPointerDown={handlePanelPointerDown}
+						onPointerMove={handlePanelPointerMove}
+						onPointerUp={handlePanelPointerUp}
+						onPointerCancel={handlePanelPointerUp}
+					>
+						<div>
+							<p className="text-sm font-semibold text-slate-900">{selectedPin.name ?? 'Pinned place'}</p>
+							{parsePinMeta(selectedPin).address ? (
+								<p className="text-xs text-slate-500">{parsePinMeta(selectedPin).address}</p>
+							) : null}
+						</div>
+						<div className="flex items-center gap-2">
+							<button
+								type="button"
+								onPointerDown={event => event.stopPropagation()}
+								onClick={event => {
+									event.stopPropagation();
+									handleResetPanelPos();
+								}}
+								className="text-xs text-slate-400 hover:text-slate-600"
+							>
+								Reset
+							</button>
+							<button
+								type="button"
+								onPointerDown={event => event.stopPropagation()}
+								onClick={event => {
+									event.stopPropagation();
+									setSelectedPinId(null);
+								}}
+								className="text-xs text-slate-400 hover:text-slate-600"
+							>
+								Close
+							</button>
+						</div>
+					</div>
+					<div className="px-4 py-3">
+						<label className="text-[11px] font-medium uppercase tracking-wide text-slate-500">Notes</label>
+						<textarea
+							value={notesDraft}
+							onChange={event => setNotesDraft(event.target.value)}
+							rows={4}
+							className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm focus:border-slate-400 focus:outline-none"
+							placeholder="Add notes about this place..."
+						/>
+						<div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
+							<span>
+								{notesStatus === 'saving' && 'Saving...'}
+								{notesStatus === 'saved' && 'Saved'}
+								{notesStatus === 'error' && 'Save failed'}
+							</span>
+							<span>{isSavingNotes ? 'Auto-saving…' : 'Auto-save on'}</span>
+						</div>
+					</div>
+				</div>
+			) : null}
 			<GoogleMap
 				initialPins={initialPins}
 				pins={pins}
 				selectedPinId={selectedPinId}
+				selectedPinCoords={selectedPinCoords}
 				onPinAdd={handlePinAdd}
 				onPinDelete={handlePinDelete}
+				onPinSelect={setSelectedPinId}
 			/>
 		</div>
 	);

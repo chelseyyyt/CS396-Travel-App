@@ -16,6 +16,8 @@ export type Pin = {
 	longitude: number;
 	place_id: string;
 	notes: string | null;
+	notes_text: string | null;
+	updated_at: string | null;
 };
 
 export type Video = {
@@ -122,6 +124,16 @@ export async function createPin(
 
 export async function deletePin(pinId: string): Promise<ApiResponse<{ deleted: true }>> {
 	return request<{ deleted: true }>(`/api/pins/${pinId}`, { method: 'DELETE' });
+}
+
+export async function updatePinNotes(
+	pinId: string,
+	notesText: string
+): Promise<ApiResponse<Pin>> {
+	return request<Pin>(`/api/pins/${pinId}`, {
+		method: 'PATCH',
+		body: JSON.stringify({ notes_text: notesText }),
+	});
 }
 
 export async function uploadTripVideo(
