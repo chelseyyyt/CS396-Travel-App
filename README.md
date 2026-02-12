@@ -106,9 +106,14 @@ npm run dev
 ```bash
 cd worker
 source .venv/bin/activate
+# make sure ollama is up
+ollama serve &>/tmp/ollama.log &
+ollama pull llama3.1:8b  
 export USE_OLLAMA=true             
 export OLLAMA_BASE_URL=http://localhost:11434
 export OLLAMA_MODEL=llama3.1:8b
+# quick sanity check
+curl -s $OLLAMA_BASE_URL/api/tags | head
 python worker.py
 ```
 

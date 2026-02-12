@@ -1,11 +1,14 @@
 import json
 import os
+import platform
+import subprocess
 import time
 import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
+import requests
 from supabase import Client, create_client
 
 from pipeline import (
@@ -18,6 +21,79 @@ from pipeline import (
 
 POLL_INTERVAL_SECONDS = 2
 print("[worker] STARTED", __file__, "pid=", os.getpid(), flush=True)
+
+OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+OLLAMA_HEALTH_ENDPOINT = f"{OLLAMA_BASE_URL}/api/tags"
+
+
+def _ollama_reachable() -> bool:
+	try:
+		response = requests.get(OLLAMA_HEALTH_ENDPOINT, timeout=2)
+		return response.ok
+	except Exception:
+		return False
+
+
+def _ollama_start() -> None:
+	if platform.system().lower() == 'darwin':
+		print('[worker] starting Ollama via open -a Ollama')
+		subprocess.Popen(['open', '-a', 'Ollama'])
+	else:
+		print('[worker] starting Ollama via ollama serve')
+		subprocess.Popen(['ollama', 'serve'])
+
+
+def _ollama_wait(timeout_seconds: int = 20, poll_interval: float = 1.0) -> None:
+	deadline = time.time() + timeout_seconds
+	while time.time() < deadline:
+		if _ollama_reachable():
+			return
+		time.sleep(poll_interval)
+	raise RuntimeError('Ollama did not become reachable in time')
+
+
+def _ollama_pull_model(model: str) -> None:
+	print(f'[worker] ensuring Ollama model: {model}')
+	subprocess.run(['ollama', 'pull', model], check=True)
+
+
+def _ollama_warm_model(model: str) -> None:
+	try:
+		requests.post(
+			f"{OLLAMA_BASE_URL}/api/generate",
+			json={'model': model, 'prompt': 'Hello', 'stream': False},
+			timeout=10,
+		)
+	except Exception:
+		pass
+
+
+def ensure_ollama_ready() -> None:
+	use_ollama = os.getenv('USE_OLLAMA', 'false').lower() == 'true'
+	if not use_ollama:
+		return
+
+	model = os.getenv('OLLAMA_MODEL', 'llama3.1:8b')
+	print('[worker] USE_OLLAMA=true; checking Ollama...')
+	if not _ollama_reachable():
+		try:
+			_ollama_start()
+			_ollama_wait()
+		except Exception as exc:
+			print('[worker] Ollama start failed', repr(exc))
+			raise
+
+	# Verify model installed; pull if missing
+	try:
+		tags = requests.get(OLLAMA_HEALTH_ENDPOINT, timeout=5).json()
+		models = [m.get('name') for m in tags.get('models', []) if isinstance(m, dict)]
+		if model not in models:
+			_ollama_pull_model(model)
+	except Exception as exc:
+		print('[worker] Ollama tag check failed', repr(exc))
+		_ollama_pull_model(model)
+
+	_ollama_warm_model(model)
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -250,6 +326,11 @@ def process_video(video: Dict[str, Any], supabase: Client, job_id: str) -> List[
 
 def main() -> None:
     load_dotenv()
+    try:
+        ensure_ollama_ready()
+    except Exception as exc:
+        print('[worker] Ollama init failed', repr(exc))
+        raise
     supabase = build_supabase()
 
     while True:

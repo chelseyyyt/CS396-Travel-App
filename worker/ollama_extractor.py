@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -100,18 +101,129 @@ def build_prompt(location_hint: Optional[str]) -> str:
 
 
 def call_ollama(prompt: str, input_payload: Dict[str, Any]) -> Tuple[str, Optional[str]]:
+    """
+    Extra-safe Ollama call:
+    - caps prompt/input size to avoid pathological latency
+    - uses connect/read timeouts
+    - retries on timeouts / transient failures
+    - returns (response_text, error_str)
+    """
+
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
     model = os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct")
+
+    # Safety caps (tune as needed)
+    MAX_INPUT_JSON_CHARS = int(os.getenv("OLLAMA_MAX_INPUT_JSON_CHARS", "20000"))
+    MAX_TOTAL_PROMPT_CHARS = int(os.getenv("OLLAMA_MAX_TOTAL_PROMPT_CHARS", "40000"))
+
+    # Timeouts: (connect_timeout, read_timeout)
+    CONNECT_TIMEOUT = float(os.getenv("OLLAMA_CONNECT_TIMEOUT", "5"))
+    READ_TIMEOUT = float(os.getenv("OLLAMA_READ_TIMEOUT", "180"))
+
+    # Retries
+    MAX_RETRIES = int(os.getenv("OLLAMA_MAX_RETRIES", "2"))
+    BACKOFF_SECONDS = float(os.getenv("OLLAMA_BACKOFF_SECONDS", "1.5"))
+
+    def _safe_json_dumps(obj: Any) -> str:
+        try:
+            return json.dumps(obj, ensure_ascii=False, default=str)
+        except Exception:
+            # Last-ditch: stringify
+            return json.dumps(str(obj), ensure_ascii=False)
+
+    # Serialize and cap input JSON
+    input_json = _safe_json_dumps(input_payload)
+    if len(input_json) > MAX_INPUT_JSON_CHARS:
+        input_json = input_json[:MAX_INPUT_JSON_CHARS] + "\n…(truncated)…"
+
+    # Build the final prompt and cap total size
+    full_prompt = f"{prompt}\nInput JSON:\n{input_json}"
+    if len(full_prompt) > MAX_TOTAL_PROMPT_CHARS:
+        # Keep the *start* (instructions) and the *end* (often contains the most recent OCR/transcript)
+        head = full_prompt[: MAX_TOTAL_PROMPT_CHARS // 2]
+        tail = full_prompt[-(MAX_TOTAL_PROMPT_CHARS // 2) :]
+        full_prompt = head + "\n…(truncated middle)…\n" + tail
+
     payload = {
         "model": model,
-        "prompt": prompt + "\nInput JSON:\n" + json.dumps(input_payload, ensure_ascii=False),
+        "prompt": full_prompt,
         "stream": False,
+        # Optional: you can set these if you want more determinism/speed
+        # "options": {"temperature": 0.2, "num_predict": 512},
     }
-    try:
-        response = requests.post("http://localhost:11434/api/generate", json=payload, timeout=45)
-        response.raise_for_status()
-        return response.json().get("response", ""), None
-    except Exception as exc:
-        return "", str(exc)
+
+    url = f"{base_url}/api/generate"
+
+    # One helpful debug line (comment out later)
+    # approx_tokens is rough; chars/4 is a decent heuristic
+    print("[worker] ollama call", {
+        "url": url,
+        "model": model,
+        "prompt_chars": len(full_prompt),
+        "approx_tokens": len(full_prompt) // 4,
+        "timeouts": (CONNECT_TIMEOUT, READ_TIMEOUT),
+        "retries": MAX_RETRIES,
+    }, flush=True)
+
+    last_err: Optional[str] = None
+
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            resp = requests.post(url, json=payload, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT))
+
+            # If Ollama returns non-200, include body preview for debugging
+            if resp.status_code < 200 or resp.status_code >= 300:
+                body_preview = resp.text[:500]
+                last_err = f"ollama_http_{resp.status_code}: {body_preview}"
+                # Retry on 5xx (server error)
+                if resp.status_code >= 500 and attempt < MAX_RETRIES:
+                    time.sleep(BACKOFF_SECONDS * (attempt + 1))
+                    continue
+                return "", last_err
+
+            data = resp.json()
+
+            # Ollama sometimes includes an error field even on 200
+            if isinstance(data, dict) and data.get("error"):
+                last_err = f"ollama_error: {data.get('error')}"
+                if attempt < MAX_RETRIES:
+                    time.sleep(BACKOFF_SECONDS * (attempt + 1))
+                    continue
+                return "", last_err
+
+            out = ""
+            if isinstance(data, dict):
+                out = data.get("response") or ""
+
+            out = out.strip()
+            if not out:
+                last_err = "ollama_empty_response"
+                if attempt < MAX_RETRIES:
+                    time.sleep(BACKOFF_SECONDS * (attempt + 1))
+                    continue
+                return "", last_err
+
+            return out, None
+
+        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectTimeout) as e:
+            last_err = f"ollama_timeout: {repr(e)}"
+            if attempt < MAX_RETRIES:
+                time.sleep(BACKOFF_SECONDS * (attempt + 1))
+                continue
+            return "", last_err
+
+        except requests.exceptions.RequestException as e:
+            last_err = f"ollama_request_error: {repr(e)}"
+            if attempt < MAX_RETRIES:
+                time.sleep(BACKOFF_SECONDS * (attempt + 1))
+                continue
+            return "", last_err
+
+        except Exception as e:
+            last_err = f"ollama_unexpected: {repr(e)}"
+            return "", last_err
+
+    return "", last_err or "ollama_unknown_error"
 
 
 def _strip_code_fences(text: str) -> str:
